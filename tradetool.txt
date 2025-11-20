@@ -1,10 +1,10 @@
 //+------------------------------------------------------------------+
 //|                                                  tradetool.mq5   |
 //|                  Ultimate 6-Button Trading Panel                 |
-//|                        Copyright 2025 © Your Name                |
+//|                        Copyright 2025 © Vuong Le                |
 //+------------------------------------------------------------------+
-#property copyright "Copyright 2025 © Your Name"
-#property link      "https://example.com"
+#property copyright "Copyright 2025 © Vuong Le"
+#property link      "https://moviot.com"
 #property version   "2.00"
 #property strict
 #property description "Professional Panel: Quick Trade + Min/Max SL/TP + Trailing + Close Tools"
@@ -336,4 +336,5 @@ void OnTick()
       if(newSL != 0 && MathAbs(newSL - sl) > _Point*0.5)
          trade.PositionModify(ticket, newSL, PositionGetDouble(POSITION_TP));
    }
+
 }
