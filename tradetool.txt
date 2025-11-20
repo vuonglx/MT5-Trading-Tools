@@ -1,0 +1,339 @@
+//+------------------------------------------------------------------+
+//|                                                  tradetool.mq5   |
+//|                  Ultimate 6-Button Trading Panel                 |
+//|                        Copyright 2025 © Your Name                |
+//+------------------------------------------------------------------+
+#property copyright "Copyright 2025 © Your Name"
+#property link      "https://example.com"
+#property version   "2.00"
+#property strict
+#property description "Professional Panel: Quick Trade + Min/Max SL/TP + Trailing + Close Tools"
+
+#include <Trade\Trade.mqh>
+
+//============================ INPUTS ================================
+input double InpLotSize      = 0.01;     // Default lot size
+input double InpSL_Pips      = 70.0;     // Default SL in pips
+input double InpTP_Pips      = 70.0;     // Default TP in pips
+input double InpTrailingPips = 100.0;    // Trailing Stop (0 = off)
+input long   InpMagicNumber  = 20251119; // Your magic number
+input string InpComment      = "TradeTool";
+
+//============================ BUTTONS ===============================
+#define BTN_BUY          "BtnBuy"
+#define BTN_SELL         "BtnSell"
+#define BTN_MIN_SLTP     "BtnMinSLTP"
+#define BTN_MAX_SLTP     "BtnMaxSLTP"
+#define BTN_CLOSE_ALL    "BtnCloseAll"
+#define BTN_CLOSE_EXCEPT "BtnCloseExcept"
+
+//============================ GLOBALS ==============================
+CTrade trade;
+
+//+------------------------------------------------------------------+
+//| Expert initialization                                           |
+//+------------------------------------------------------------------+
+int OnInit()
+{
+   trade.SetExpertMagicNumber(InpMagicNumber);
+
+   CreateAlignedButton(BTN_BUY,          "Quick Buy",        clrDarkGreen,    0);
+   CreateAlignedButton(BTN_SELL,         "Quick Sell",       clrDarkRed,      1);
+   CreateAlignedButton(BTN_MIN_SLTP,     "Update Min SL/TP", clrForestGreen,  2);
+   CreateAlignedButton(BTN_MAX_SLTP,     "Update Max SL/TP", clrRoyalBlue,    3);
+   CreateAlignedButton(BTN_CLOSE_ALL,    "Close All",        clrPurple,       4);
+   CreateAlignedButton(BTN_CLOSE_EXCEPT, "Close Except Best",clrRed,          5);
+
+   Print("TradeTool v2.00 PRO loaded — 6 perfect buttons on ", _Symbol);
+   return(INIT_SUCCEEDED);
+}
+
+//+------------------------------------------------------------------+
+//| Create button aligned under MT5 default panel                    |
+//+------------------------------------------------------------------+
+void CreateAlignedButton(string name, string text, color bg, int row)
+{
+   if(ObjectFind(0,name) == -1)
+      ObjectCreate(0, name, OBJ_BUTTON, 0, 0, 0);
+
+   int base_y = 108;           // Exact Y of default Buy/Sell buttons
+   int h      = 50;           // Height
+   int gap    = 10;            // Space between buttons
+
+   ObjectSetInteger(0, name, OBJPROP_CORNER,       CORNER_LEFT_UPPER);
+   ObjectSetInteger(0, name, OBJPROP_XDISTANCE,    10);
+   ObjectSetInteger(0, name, OBJPROP_YDISTANCE,    base_y + row*(h + gap));
+   ObjectSetInteger(0, name, OBJPROP_XSIZE,        130);
+   ObjectSetInteger(0, name, OBJPROP_YSIZE,        h);
+   ObjectSetString (0, name, OBJPROP_TEXT,         text);
+   ObjectSetInteger(0, name, OBJPROP_COLOR,        clrWhite);
+   ObjectSetInteger(0, name, OBJPROP_BGCOLOR,      bg);
+   ObjectSetInteger(0, name, OBJPROP_FONTSIZE,     10);
+   ObjectSetString (0, name, OBJPROP_FONT,         "Arial Bold");
+   ObjectSetInteger(0, name, OBJPROP_SELECTABLE,   false);
+}
+
+//+------------------------------------------------------------------+
+//| Deinitialization                                                 |
+//+------------------------------------------------------------------+
+void OnDeinit(const int reason)
+{
+   ObjectDelete(0, BTN_BUY);
+   ObjectDelete(0, BTN_SELL);
+   ObjectDelete(0, BTN_MIN_SLTP);
+   ObjectDelete(0, BTN_MAX_SLTP);
+   ObjectDelete(0, BTN_CLOSE_ALL);
+   ObjectDelete(0, BTN_CLOSE_EXCEPT);
+}
+
+//+------------------------------------------------------------------+
+//| Chart events                                                     |
+//+------------------------------------------------------------------+
+void OnChartEvent(const int id, const long &lparam, const double &dparam, const string &sparam)
+{
+   if(id != CHARTEVENT_OBJECT_CLICK) return;
+
+   if(sparam == BTN_BUY)          { FlashButton(BTN_BUY, clrLime);          QuickOrder(ORDER_TYPE_BUY); }
+   if(sparam == BTN_SELL)         { FlashButton(BTN_SELL, clrLime);         QuickOrder(ORDER_TYPE_SELL); }
+   if(sparam == BTN_MIN_SLTP)     { FlashButton(BTN_MIN_SLTP, clrLime);     UpdateMinSLTP(); }
+   if(sparam == BTN_MAX_SLTP)     { FlashButton(BTN_MAX_SLTP, clrLime);     UpdateMaxSLTP(); }
+   if(sparam == BTN_CLOSE_ALL)    { FlashButton(BTN_CLOSE_ALL, clrLime);      CloseAllMyPositions(); }
+   if(sparam == BTN_CLOSE_EXCEPT) { FlashButton(BTN_CLOSE_EXCEPT, clrLime);   CloseExceptBest(); }
+}
+
+void FlashButton(string name, color c)
+{
+   color orig = (color)ObjectGetInteger(0, name, OBJPROP_BGCOLOR);
+   ObjectSetInteger(0, name, OBJPROP_BGCOLOR, c);
+   Sleep(200);
+   ObjectSetInteger(0, name, OBJPROP_BGCOLOR, orig);
+}
+
+//+------------------------------------------------------------------+
+//| Quick Buy / Sell                                                 |
+//+------------------------------------------------------------------+
+void QuickOrder(ENUM_ORDER_TYPE type)
+{
+   double price = (type == ORDER_TYPE_BUY) ? SymbolInfoDouble(_Symbol,SYMBOL_ASK)
+                                          : SymbolInfoDouble(_Symbol,SYMBOL_BID);
+   double point = _Point;
+   double sl = 0, tp = 0;
+
+   double sl_offset = InpSL_Pips;
+   double tp_offset = InpTP_Pips;
+
+   if(StringFind(_Symbol,"XAUUSD")!=-1 || StringFind(_Symbol,"GOLD")!=-1)
+   {
+      sl_offset *= 0.1;
+      tp_offset *= 0.1;
+   }
+   else
+   {
+      sl_offset *= 10 * point;
+      tp_offset *= 10 * point;
+   }
+
+   if(InpSL_Pips > 0) sl = (type == ORDER_TYPE_BUY) ? price - sl_offset : price + sl_offset;
+   if(InpTP_Pips > 0) tp = (type == ORDER_TYPE_BUY) ? price + tp_offset : price - tp_offset;
+
+   sl = NormalizeDouble(sl, _Digits);
+   tp = NormalizeDouble(tp, _Digits);
+
+   bool ok = trade.PositionOpen(_Symbol, type, InpLotSize, price, sl, tp, InpComment);
+   Print(ok ? "SUCCESS: "+(type==ORDER_TYPE_BUY?"BUY":"SELL")+" opened"
+            : "FAILED: "+trade.ResultRetcodeDescription());
+}
+
+//+------------------------------------------------------------------+
+//| Update Min SL/TP - use smallest distance or default 70 pips      |
+//+------------------------------------------------------------------+
+void UpdateMinSLTP()
+{
+   double min_sl_dist = 1e10, min_tp_dist = 1e10;
+   bool found_sl = false, found_tp = false;
+
+   for(int i=PositionsTotal()-1; i>=0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(!PositionSelectByTicket(ticket)) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != InpMagicNumber) continue;
+
+      double sl = PositionGetDouble(POSITION_SL);
+      double tp = PositionGetDouble(POSITION_TP);
+      double price = PositionGetDouble(POSITION_PRICE_CURRENT);
+
+      if(sl > 0)
+      {
+         double dist = MathAbs(price - sl);
+         if(dist < min_sl_dist) min_sl_dist = dist;
+         found_sl = true;
+      }
+      if(tp > 0)
+      {
+         double dist = MathAbs(tp - price);
+         if(dist < min_tp_dist) min_tp_dist = dist;
+         found_tp = true;
+      }
+   }
+
+   // Use default 70 pips if no SL/TP found
+   if(!found_sl) min_sl_dist = InpSL_Pips * (StringFind(_Symbol,"XAUUSD")!=-1 || StringFind(_Symbol,"GOLD")!=-1 ? 0.1 : 10*_Point);
+   if(!found_tp) min_tp_dist = InpTP_Pips * (StringFind(_Symbol,"XAUUSD")!=-1 || StringFind(_Symbol,"GOLD")!=-1 ? 0.1 : 10*_Point);
+
+   // Apply to all positions
+   for(int i=PositionsTotal()-1; i>=0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(!PositionSelectByTicket(ticket)) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != InpMagicNumber) continue;
+
+      double price = PositionGetDouble(POSITION_PRICE_CURRENT);
+      double new_sl = (PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY) ? price - min_sl_dist : price + min_sl_dist;
+      double new_tp = (PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY) ? price + min_tp_dist : price - min_tp_dist;
+
+      trade.PositionModify(ticket, NormalizeDouble(new_sl,_Digits), NormalizeDouble(new_tp,_Digits));
+   }
+   Print("Min SL/TP updated: ", DoubleToString(min_sl_dist/_Point,1), " pips");
+}
+
+//+------------------------------------------------------------------+
+//| Update Max SL/TP - use largest distance or default 70 pips       |
+//+------------------------------------------------------------------+
+void UpdateMaxSLTP()
+{
+   double max_sl_dist = 0, max_tp_dist = 0;
+
+   for(int i=PositionsTotal()-1; i>=0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(!PositionSelectByTicket(ticket)) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != InpMagicNumber) continue;
+
+      double sl = PositionGetDouble(POSITION_SL);
+      double tp = PositionGetDouble(POSITION_TP);
+      double price = PositionGetDouble(POSITION_PRICE_CURRENT);
+
+      if(sl > 0) max_sl_dist = MathMax(max_sl_dist, MathAbs(price - sl));
+      if(tp > 0) max_tp_dist = MathMax(max_tp_dist, MathAbs(tp - price));
+   }
+
+   // Use default 70 pips if no SL/TP found
+   if(max_sl_dist == 0) max_sl_dist = InpSL_Pips * (StringFind(_Symbol,"XAUUSD")!=-1 || StringFind(_Symbol,"GOLD")!=-1 ? 0.1 : 10*_Point);
+   if(max_tp_dist == 0) max_tp_dist = InpTP_Pips * (StringFind(_Symbol,"XAUUSD")!=-1 || StringFind(_Symbol,"GOLD")!=-1 ? 0.1 : 10*_Point);
+
+   // Apply to all positions
+   for(int i=PositionsTotal()-1; i>=0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(!PositionSelectByTicket(ticket)) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != InpMagicNumber) continue;
+
+      double price = PositionGetDouble(POSITION_PRICE_CURRENT);
+      double new_sl = (PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY) ? price - max_sl_dist : price + max_sl_dist;
+      double new_tp = (PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY) ? price + max_tp_dist : price - max_tp_dist;
+
+      trade.PositionModify(ticket, NormalizeDouble(new_sl,_Digits), NormalizeDouble(new_tp,_Digits));
+   }
+   Print("Max SL/TP updated: ", DoubleToString(max_sl_dist/_Point,1), " pips");
+}
+
+//+------------------------------------------------------------------+
+//| Close All My Positions                                           |
+//+------------------------------------------------------------------+
+void CloseAllMyPositions()
+{
+   for(int i=PositionsTotal()-1; i>=0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(PositionGetInteger(POSITION_MAGIC) == InpMagicNumber)
+         trade.PositionClose(ticket);
+   }
+   Print("All my positions closed");
+}
+
+//+------------------------------------------------------------------+
+//| Close All Except Best Profit                                      |
+//+------------------------------------------------------------------+
+void CloseExceptBest()
+{
+   ulong best = 0;
+   double bestProfit = -1e10;
+
+   for(int i=PositionsTotal()-1; i>=0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(PositionGetString(POSITION_SYMBOL) == _Symbol &&
+         PositionGetInteger(POSITION_MAGIC) == InpMagicNumber)
+      {
+         double profit = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+         if(profit > bestProfit)
+         {
+            bestProfit = profit;
+            best = ticket;
+         }
+      }
+   }
+
+   for(int i=PositionsTotal()-1; i>=0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(PositionGetString(POSITION_SYMBOL) == _Symbol &&
+         PositionGetInteger(POSITION_MAGIC) == InpMagicNumber &&
+         ticket != best)
+      {
+         trade.PositionClose(ticket);
+      }
+   }
+   Print("Closed all except best on ", _Symbol);
+}
+
+//+------------------------------------------------------------------+
+//| Trailing Stop                                                    |
+//+------------------------------------------------------------------+
+void OnTick()
+{
+   if(InpTrailingPips <= 0) return;
+
+   static datetime last = 0;
+   if(TimeCurrent() == last) return;
+   last = TimeCurrent();
+
+   double trail = InpTrailingPips;
+   if(StringFind(_Symbol,"XAUUSD")!=-1 || StringFind(_Symbol,"GOLD")!=-1) trail *= 0.1;
+   else trail *= 10 * _Point;
+
+   for(int i=PositionsTotal()-1; i>=0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(!PositionSelectByTicket(ticket)) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != InpMagicNumber) continue;
+
+      double price = PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY ?
+                     SymbolInfoDouble(_Symbol,SYMBOL_BID) :
+                     SymbolInfoDouble(_Symbol,SYMBOL_ASK);
+
+      double sl = PositionGetDouble(POSITION_SL);
+      double open = PositionGetDouble(POSITION_PRICE_OPEN);
+      double newSL = 0;
+
+      if(PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY)
+      {
+         if(price - open > trail && (sl < price - trail || sl==0))
+            newSL = NormalizeDouble(price - trail, _Digits);
+      }
+      else
+      {
+         if(open - price > trail && (sl > price + trail || sl==0))
+            newSL = NormalizeDouble(price + trail, _Digits);
+      }
+
+      if(newSL != 0 && MathAbs(newSL - sl) > _Point*0.5)
+         trade.PositionModify(ticket, newSL, PositionGetDouble(POSITION_TP));
+   }
+}
